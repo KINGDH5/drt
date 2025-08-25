@@ -21,10 +21,10 @@ from streamlit_folium import st_folium
 
 # ===================== 경로/상수 =====================
 EXISTING_SHP   = "천안콜 버스 정류장(v250730)_4326.shp"
-CANDIDATE_PATH = "N_top800_WGS.shp"   # 후보 정류장 shapefile (jibun 컬럼 포함)
+CANDIDATE_PATH = "N_top800_WGS.shp"   # 후보 정류장 shapefile
 
 # 기본 토큰(없으면 UI/환경변수/시크릿 순으로 불러옴)
-MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lbWppYjByMDV2ajJqcjQyYXUxdzY3byJ9.yLBRJK_Ib6W3p9f16YlIKQ"
+MAPBOX_TOKEN = ""
 if not MAPBOX_TOKEN:
     MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "")
 if not MAPBOX_TOKEN:
@@ -65,7 +65,7 @@ with st.sidebar:
         st.rerun()
 
     # ✅ 맵박스 토큰 입력칸 추가
-    user_token = st.text_input("pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lbWppYjByMDV2ajJqcjQyYXUxdzY3byJ9.yLBRJK_Ib6W3p9f16YlIKQ", type="password")
+    user_token = st.text_input("🔑 Mapbox Token 입력", type="password", help="환경변수(MAPBOX_TOKEN)나 secrets가 없으면 여기 입력하세요.")
     if user_token:
         MAPBOX_TOKEN = user_token.strip()
 
@@ -147,9 +147,11 @@ def load_existing_candidates():
     existing = read_existing_shp(EXISTING_SHP)
     cand     = read_vector(CANDIDATE_PATH)
 
-    # ✅ 후보 정류장 이름을 'jibun' 컬럼으로 강제
+    # ✅ 후보 정류장: 컬럼명 소문자+strip 처리
+    cand.columns = [c.strip().lower() for c in cand.columns]
+
     if "jibun" not in cand.columns:
-        st.error("후보 데이터에 'jibun' 컬럼이 없습니다.")
+        st.error(f"후보 데이터에 'jibun' 컬럼이 없습니다. 실제 컬럼: {list(cand.columns)}")
         st.stop()
     cand["name"] = cand["jibun"].astype(str).str.strip()
 
@@ -304,7 +306,7 @@ with c3:
                             coords, dur, dist = mapbox_route(sxy[0], sxy[1], exy[0], exy[1],
                                                              profile=profile, token=MAPBOX_TOKEN)
                             ll = [(c[1], c[0]) for c in coords]
-                            folium.PolyLine(ll, color=PALETTE[(i+j) % len(PALETTE)], weight=5, opacity=0.9).add_to(fg_routes)
+                            folium.PolyLine(ll, color=PALETTE[(i+j)%len(PALETTE)], weight=5, opacity=0.9).add_to(fg_routes)
                             total_min += dur/60; total_km += dist/1000
                             order_names.append(f"{s} → {e}")
                         except Exception as e:
@@ -313,7 +315,7 @@ with c3:
                 steps = build_single_vehicle_steps(starts, ends, cand_gdf)
                 prev=None
                 for idx, step in enumerate(steps, start=1):
-                    lon, lat = step["xy"]; name = step["name"]
+                    lon,lat=step["xy"]; name=step["name"]
                     color = "#e74c3c" if (step["kind"]=="pickup" and idx==1) else ("#8e44ad" if step["kind"]=="pickup" else "#3498db")
                     folium.Marker([lat,lon], tooltip=f"{idx}. {step['kind']} : {name}",
                                   icon=DivIcon(html=badge(idx,color)), z_index_offset=1000).add_to(fg_routes)
@@ -344,7 +346,7 @@ cover_mode = st.radio("커버 산정 방식", ["버퍼 합집합(반경 r)", "�
 if cover_mode.startswith("버퍼"):
     radius_m = st.slider("커버리지 반경(미터)", min_value=50, max_value=300, value=100, step=10)
 else:
-    radius_m = 100  # 사용 안함(헐 모드), 시그니처용
+    radius_m = 100  # 헐 모드에서는 사용하지 않지만 시그니처 유지
 
 exist_pts = existing_gdf[["name","lon","lat","geometry"]].copy()
 cand_pts  = cand_gdf[["name","lon","lat","geometry"]].copy()
