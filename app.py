@@ -21,8 +21,9 @@ from streamlit_folium import st_folium
 
 # ===================== 경로/상수 =====================
 EXISTING_SHP   = "천안콜 버스 정류장(v250730)_4326.shp"
-CANDIDATE_PATH = "N_top800_WGS.shp"     # ✅ 바뀐 부분: 후보 정류장 파일 지정(확장자 포함)
+CANDIDATE_PATH = "N_top800_WGS.shp"   # 후보 정류장 shapefile (jibun 컬럼 포함)
 
+# 기본 토큰(없으면 UI/환경변수/시크릿 순으로 불러옴)
 MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lbWppYjByMDV2ajJqcjQyYXUxdzY3byJ9.yLBRJK_Ib6W3p9f16YlIKQ"
 if not MAPBOX_TOKEN:
     MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "")
@@ -51,7 +52,7 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', -apple-system, BlinkMa
 """, unsafe_allow_html=True)
 st.markdown('<div class="header"><div class="title">천안 DRT - 맞춤형 AI기반 스마트 교통 가이드</div></div>', unsafe_allow_html=True)
 
-# ===================== 사이드바 리셋 =====================
+# ===================== 사이드바 =====================
 with st.sidebar:
     if st.button("🔄 캐시/세션 초기화 후 재실행"):
         try: st.cache_data.clear()
@@ -62,6 +63,11 @@ with st.sidebar:
             try: del st.session_state[k]
             except: pass
         st.rerun()
+
+    # ✅ 맵박스 토큰 입력칸 추가
+    user_token = st.text_input("pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lbWppYjByMDV2ajJqcjQyYXUxdzY3byJ9.yLBRJK_Ib6W3p9f16YlIKQ", type="password")
+    if user_token:
+        MAPBOX_TOKEN = user_token.strip()
 
 # ===================== 파일 로드 유틸 =====================
 def read_shp_with_encoding(path: Path) -> gpd.GeoDataFrame:
@@ -92,12 +98,8 @@ def read_shp_with_encoding(path: Path) -> gpd.GeoDataFrame:
     raise RuntimeError("read_shp failed")
 
 def read_vector(path_or_stem: str) -> gpd.GeoDataFrame:
-    """
-    - 확장자 포함 경로면 그대로 읽음(.shp/.gpkg/.geojson)
-    - 확장자 없이 stem만 오면 .shp → .gpkg → .geojson 순으로 탐색
-    """
     p = Path(path_or_stem)
-    if p.suffix:  # 확장자 포함
+    if p.suffix:
         if p.suffix.lower()==".shp":
             g = read_shp_with_encoding(p)
         else:
@@ -117,7 +119,6 @@ def read_vector(path_or_stem: str) -> gpd.GeoDataFrame:
     except Exception:
         pass
 
-    # 포인트가 아닌 경우 대표점으로 변환(툴팁/좌표용)
     if not g.geom_type.astype(str).str.contains("Point",case=False,na=False).any():
         g=g.copy(); g["geometry"]=g.geometry.representative_point()
     return g
@@ -139,6 +140,26 @@ def read_existing_shp(path: str) -> gpd.GeoDataFrame:
         g=g.copy(); g["geometry"]=g.geometry.representative_point()
     g["lon"]=g.geometry.x; g["lat"]=g.geometry.y
     return g[["name","lon","lat","geometry"]]
+
+# ===================== 데이터 로드 =====================
+@st.cache_data
+def load_existing_candidates():
+    existing = read_existing_shp(EXISTING_SHP)
+    cand     = read_vector(CANDIDATE_PATH)
+
+    # ✅ 후보 정류장 이름을 'jibun' 컬럼으로 강제
+    if "jibun" not in cand.columns:
+        st.error("후보 데이터에 'jibun' 컬럼이 없습니다.")
+        st.stop()
+    cand["name"] = cand["jibun"].astype(str).str.strip()
+
+    cand["lon"]  = cand.geometry.x
+    cand["lat"]  = cand.geometry.y
+    cand = cand[["name","lon","lat","geometry"]]
+
+    return existing, cand
+
+existing_gdf, cand_gdf = load_existing_candidates()
 
 # ===================== 라우팅 유틸 =====================
 def haversine(xy1, xy2):
@@ -194,49 +215,21 @@ def build_single_vehicle_steps(starts: List[str], ends: List[str], stops_df: pd.
         cur_pt=dst_xy[mapping[nxt]]
     return order
 
-# ===================== 커버리지 계산(버퍼/컨벡스헐) =====================
+# ===================== 커버리지 계산 =====================
 def coverage_region(points_gdf: gpd.GeoDataFrame, mode: str = "buffer", radius_m: int = 100):
-    """
-    mode='buffer'  -> 포인트를 3857에서 r(m) 버퍼 후 unary_union
-    mode='hull'    -> 포인트의 convex hull(최소 볼록 외피)
-    반환: (WGS84 폴리곤 GeoDataFrame, 면적 km²)
-    """
     if points_gdf.empty:
         return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326"), 0.0
-
     g = points_gdf.to_crs(epsg=3857)
-
     if mode == "hull":
         hull = MultiPoint(list(g.geometry)).convex_hull
         geom_3857 = hull
     else:
         geom_3857 = unary_union(g.buffer(radius_m))
-
-    # 면적(km²)
     area_km2 = float(gpd.GeoSeries([geom_3857], crs="EPSG:3857").area.iloc[0] / 1_000_000)
-    # 시각화용(WGS84)
     out = gpd.GeoDataFrame(geometry=[geom_3857], crs="EPSG:3857").to_crs(epsg=4326)
     return out, area_km2
 
-# ===================== 데이터 로드 =====================
-@st.cache_data
-def load_existing_candidates():
-    existing = read_existing_shp(EXISTING_SHP)
-    cand     = read_vector(CANDIDATE_PATH)      # ✅ 바뀐 부분: 직접 경로/파일명 사용
-
-    # name 컬럼 보정(기존 로직 유지)
-    if "jibun" in cand.columns and "name" not in cand.columns:
-        cand["name"]=cand["jibun"].astype(str)
-    else:
-        cand["name"]=cand.get("name", cand.get("jibun", pd.Series([f"후보_{i+1}" for i in range(len(cand))]))).astype(str)
-
-    cand["lon"]=cand.geometry.x; cand["lat"]=cand.geometry.y
-    cand=cand[["name","lon","lat","geometry"]]
-    return existing, cand
-
-existing_gdf, cand_gdf = load_existing_candidates()
-
-# ===================== 라우팅/지도(위) =====================
+# ===================== 노선 추천 UI =====================
 st.markdown('<div class="section">🚏 노선 추천</div>', unsafe_allow_html=True)
 c1, c2, c3 = st.columns([1.8,1.2,3.2], gap="large")
 
@@ -303,14 +296,15 @@ with c3:
                         "box-shadow:0 2px 6px rgba(0,0,0,.35);font-size:13px;'>"+str(n)+"</div>")
 
             if route_mode.startswith("개별쌍"):
-                for i,s in enumerate(starts):
-                    for j,e in enumerate(ends):
-                        sxy, exy = xy_from(cand_gdf,s), xy_from(cand_gdf,e)
+                for i, s in enumerate(starts):
+                    for j, e in enumerate(ends):
+                        sxy, exy = xy_from(cand_gdf, s), xy_from(cand_gdf, e)
                         if not sxy or not exy: continue
                         try:
-                            coords,dur,dist = mapbox_route(sxy[0],sxy[1],exy[0],exy[1], profile=profile, token=MAPBOX_TOKEN)
-                            ll=[(c[1],c[0]) for c in coords]
-                            folium.PolyLine(ll, color=PALETTE[(i+j)%len(PALETTE)], weight=5, opacity=0.9).add_to(fg_routes)
+                            coords, dur, dist = mapbox_route(sxy[0], sxy[1], exy[0], exy[1],
+                                                             profile=profile, token=MAPBOX_TOKEN)
+                            ll = [(c[1], c[0]) for c in coords]
+                            folium.PolyLine(ll, color=PALETTE[(i+j) % len(PALETTE)], weight=5, opacity=0.9).add_to(fg_routes)
                             total_min += dur/60; total_km += dist/1000
                             order_names.append(f"{s} → {e}")
                         except Exception as e:
@@ -319,7 +313,7 @@ with c3:
                 steps = build_single_vehicle_steps(starts, ends, cand_gdf)
                 prev=None
                 for idx, step in enumerate(steps, start=1):
-                    lon,lat=step["xy"]; name=step["name"]
+                    lon, lat = step["xy"]; name = step["name"]
                     color = "#e74c3c" if (step["kind"]=="pickup" and idx==1) else ("#8e44ad" if step["kind"]=="pickup" else "#3498db")
                     folium.Marker([lat,lon], tooltip=f"{idx}. {step['kind']} : {name}",
                                   icon=DivIcon(html=badge(idx,color)), z_index_offset=1000).add_to(fg_routes)
@@ -343,15 +337,14 @@ with c3:
     folium.LayerControl(collapsed=True).add_to(m)
     st_folium(m, height=510, returned_objects=[], use_container_width=True, key="routing_map")
 
-# ===================== 커버리지 비교(아래 지도) =====================
+# ===================== 커버리지 비교 (아래 지도) =====================
 st.markdown('<div class="section">🗺️ 커버리지 비교 (전체 기준)</div>', unsafe_allow_html=True)
 
 cover_mode = st.radio("커버 산정 방식", ["버퍼 합집합(반경 r)", "컨벡스 헐(최대 외피)"], horizontal=True, index=0)
 if cover_mode.startswith("버퍼"):
     radius_m = st.slider("커버리지 반경(미터)", min_value=50, max_value=300, value=100, step=10)
 else:
-    radius_m = 100
-    st.caption("※ 컨벡스 헐은 반경을 사용하지 않습니다. 모든 점을 감싸는 최소 볼록 다각형을 사용합니다.")
+    radius_m = 100  # 사용 안함(헐 모드), 시그니처용
 
 exist_pts = existing_gdf[["name","lon","lat","geometry"]].copy()
 cand_pts  = cand_gdf[["name","lon","lat","geometry"]].copy()
@@ -399,4 +392,3 @@ if not prop_poly.empty:
 
 folium.LayerControl(collapsed=True).add_to(m2)
 st_folium(m2, height=560, returned_objects=[], use_container_width=True, key="coverage_map_all")
-
