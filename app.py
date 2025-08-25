@@ -23,7 +23,7 @@ from streamlit_folium import st_folium
 EXISTING_SHP   = "천안콜 버스 정류장(v250730)_4326.shp"
 CANDIDATE_PATH = "NNN_top800.shp"   # 후보 정류장 (정류장명=jibun)
 
-# ✅ 본인 Mapbox 토큰으로 바꿔 넣으세요
+# ✅ 본인 Mapbox 토큰으로 바꿔 넣으세요 (pk.로 시작)
 MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lbWppYjByMDV2ajJqcjQyYXUxdzY3byJ9.yLBRJK_Ib6W3p9f16YlIKQ"
 
 PALETTE = ["#e74c3c","#8e44ad","#3498db","#e67e22","#16a085","#2ecc71","#1abc9c","#d35400"]
@@ -44,30 +44,56 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', -apple-system, BlinkMa
 .visit-num{background:#fff;color:#667eea;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.75rem}
 .empty{color:#9ca3af;background:linear-gradient(135deg,#ffecd2 0%,#fcb69f 100%);border-radius:12px;padding:18px 12px;text-align:center}
 
-/* ===== Multiselect 칩: 크기 키우기 + 2열 + 전체 주소 표시 ===== */
+/* ===== Multiselect 칩: 더 넓게 + 2줄 완전표시 + 2열 레이아웃 ===== */
+
+/* 칩 컨테이너: 여러 줄 허용 */
 .stMultiSelect [data-baseweb="select"] > div {
+  display: flex !important;
   flex-wrap: wrap !important;
   gap: 10px !important;
   padding-bottom: 6px;
 }
+
+/* 개별 칩(빨간 태그) */
 .stMultiSelect [data-baseweb="tag"] {
-  width: 48% !important;          /* 2열 */
+  /* 2열로 보이도록 폭(1열 원하면 아래 48% → 100% 로 변경) */
+  width: 48% !important;
   max-width: 48% !important;
-  min-height: 48px !important;    /* 칩 높이 업 */
-  padding: 10px 12px !important;
-  border-radius: 10px !important;
-  white-space: normal !important; /* 줄바꿈 허용 */
-  overflow: visible !important;
-  text-overflow: clip !important;
-  align-items: flex-start !important;
-  box-sizing: border-box;
-}
-.stMultiSelect [data-baseweb="tag"] * {
+
+  /* 높이/패딩 키워서 2줄 충분히 들어가도록 */
+  min-height: 64px !important;
+  padding: 12px 14px !important;
+  border-radius: 12px !important;
+
+  /* 줄바꿈 및 잘림 방지 */
   white-space: normal !important;
   overflow: visible !important;
   text-overflow: clip !important;
-  max-width: none !important;
+
+  /* 내부 정렬 */
+  display: flex !important;
+  align-items: flex-start !important;
+  box-sizing: border-box;
 }
+
+/* 칩 내부 텍스트: 2줄 이상 완전 표시 */
+.stMultiSelect [data-baseweb="tag"] span,
+.stMultiSelect [data-baseweb="tag"] div,
+.stMultiSelect [data-baseweb="tag"] p {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  line-height: 1.35 !important;
+  max-height: none !important;
+}
+
+/* 닫기(X) 아이콘 정렬 */
+.stMultiSelect [data-baseweb="tag"] svg {
+  align-self: flex-start !important;
+  margin-top: 6px;
+}
+
+/* 입력창(콤보박스) 전체 높이 자동 확장 */
 .stMultiSelect [data-baseweb="select"] [role="combobox"] {
   height: auto !important;
   min-height: 46px !important;
