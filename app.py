@@ -21,13 +21,14 @@ from streamlit_folium import st_folium
 
 # ===================== 경로/상수 =====================
 EXISTING_SHP   = "천안콜 버스 정류장(v250730)_4326.shp"
-CANDIDATE_PATH = "N_top800_WGS.shp"   # <- 필요시 "NNN_top800.shp" 등으로 변경
+CANDIDATE_PATH = "NNN_top800.shp"   # ✅ 후보 정류장 Shapefile (jibun 컬럼 사용)
 
 # 기본 토큰(없으면 UI/환경변수/시크릿 순으로 불러옴)
-MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lbWppYjByMDV2ajJqcjQyYXUxdzY3byJ9.yLBRJK_Ib6W3p9f16YlIKQ")
+MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "")
 if not MAPBOX_TOKEN:
     try: MAPBOX_TOKEN = st.secrets["MAPBOX_TOKEN"]
-    except Exception: pass
+    except Exception:
+        pass
 
 PALETTE = ["#e74c3c","#8e44ad","#3498db","#e67e22","#16a085","#2ecc71","#1abc9c","#d35400"]
 PER_VEHICLE_LIMIT_MIN = 30.0  # 1대 목표 운영시간(분)
@@ -50,7 +51,7 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', -apple-system, BlinkMa
 /* ===== 선택 항목 2열 칩(긴 주소 전부 표시) ===== */
 .sel-grid { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
 .sel-chip  {
-  flex: 1 1 calc(50% - 8px);     /* 가로 2개씩 */
+  flex: 1 1 calc(50% - 8px);
   min-width: calc(50% - 8px);
   max-width: calc(50% - 8px);
   padding:10px 12px;
@@ -61,8 +62,8 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', -apple-system, BlinkMa
   font-size:0.9rem;
   line-height:1.35;
   box-shadow:0 1px 2px rgba(0,0,0,.04);
-  word-break:break-word;         /* 긴 주소 줄바꿈 */
-  white-space:normal;            /* 칩 내부 줄바꿈 허용 */
+  word-break:break-word;
+  white-space:normal;
 }
 .sel-chip .idx {
   display:inline-flex; align-items:center; justify-content:center;
@@ -99,7 +100,8 @@ with st.sidebar:
         st.rerun()
 
     # ✅ 맵박스 토큰 입력칸
-    user_token = st.text_input("🔑 Mapbox Token 입력", type="password", help="환경변수(MAPBOX_TOKEN)나 secrets가 없으면 여기 입력하세요.")
+    user_token = st.text_input("🔑 Mapbox Token 입력", type="password",
+                               help="환경변수(MAPBOX_TOKEN)나 secrets가 없으면 여기 입력하세요.")
     if user_token:
         MAPBOX_TOKEN = user_token.strip()
 
@@ -112,6 +114,11 @@ def read_shp_with_encoding(path: Path) -> gpd.GeoDataFrame:
     except Exception:
         st.error("pyogrio가 필요합니다. requirements.txt에 'pyogrio' 추가")
         raise
+    # 존재 확인을 먼저
+    if not path.exists():
+        st.error(f"파일이 없습니다: {path.name}  (현재 폴더: {Path('.').resolve()})")
+        st.stop()
+
     encs=[]
     try:
         cpg=path.with_suffix(".cpg")
@@ -139,6 +146,9 @@ def read_vector(path_or_stem: str) -> gpd.GeoDataFrame:
         if p.suffix.lower()==".shp":
             g = read_shp_with_encoding(p)
         else:
+            if not p.exists():
+                st.error(f"파일이 없습니다: {p.name}")
+                st.stop()
             g = gpd.read_file(p)
     else:
         for ext in (".shp",".gpkg",".geojson"):
@@ -147,7 +157,8 @@ def read_vector(path_or_stem: str) -> gpd.GeoDataFrame:
                 g = read_shp_with_encoding(cand) if ext==".shp" else gpd.read_file(cand)
                 break
         else:
-            st.error(f"'{path_or_stem}.shp/.gpkg/.geojson' 파일을 같은 폴더에 두세요."); st.stop()
+            st.error(f"'{path_or_stem}.shp/.gpkg/.geojson' 파일을 같은 폴더에 두세요.")
+            st.stop()
 
     try:
         if g.crs and g.crs.to_epsg()!=4326:
@@ -162,7 +173,8 @@ def read_vector(path_or_stem: str) -> gpd.GeoDataFrame:
 def read_existing_shp(path: str) -> gpd.GeoDataFrame:
     p=Path(path)
     if not p.exists():
-        st.error(f"기존 DRT 파일 없음: {path}"); st.stop()
+        st.error(f"기존 DRT 파일 없음: {path}")
+        st.stop()
     g=read_shp_with_encoding(p) if p.suffix.lower()==".shp" else gpd.read_file(p)
     try:
         if g.crs and g.crs.to_epsg()!=4326: g=g.to_crs(epsg=4326)
@@ -177,7 +189,7 @@ def read_existing_shp(path: str) -> gpd.GeoDataFrame:
     g["lon"]=g.geometry.x; g["lat"]=g.geometry.y
     return g[["name","lon","lat","geometry"]]
 
-# ===================== 데이터 로드 (캐시 & 컬럼 자동감지) =====================
+# ===================== 데이터 로드 (캐시 & jibun 고정) =====================
 def _file_sig(path: str) -> str:
     p=Path(path)
     try:
@@ -193,33 +205,22 @@ def load_existing_candidates(_sig_exist: str, _sig_cand: str):
     # 컬럼명 소문자+strip 통일
     cand.columns = [c.strip().lower() for c in cand.columns]
 
-    # 주소 컬럼 자동 선택(우선순위: jibun → juso → 입력주소 → 표준신주소 → 표준구주소)
-    addr_col = None
-    for c in ["jibun", "juso", "입력주소", "표준신주소", "표준구주소"]:
-        lc = c.lower()
-        if lc in cand.columns:
-            addr_col = lc
-            break
-    if addr_col is None:
-        st.error(f"후보 데이터에 주소 컬럼이 없습니다. 실제 컬럼: {list(cand.columns)}")
+    # ✅ 반드시 jibun 컬럼 사용
+    if "jibun" not in cand.columns:
+        st.error(f"후보 데이터에 'jibun' 컬럼이 없습니다. 실제 컬럼: {list(cand.columns)}")
         st.stop()
 
-    # 정류장명 = 주소
-    cand["name"] = cand[addr_col].astype(str).str.strip()
+    # 정류장명 = jibun
+    cand["name"] = cand["jibun"].astype(str).str.strip()
     cand["lon"]  = cand.geometry.x
     cand["lat"]  = cand.geometry.y
     cand = cand[["name","lon","lat","geometry"]]
 
-    return existing, cand, addr_col
+    return existing, cand
 
-existing_gdf, cand_gdf, used_addr_col = load_existing_candidates(
+existing_gdf, cand_gdf = load_existing_candidates(
     _file_sig(EXISTING_SHP), _file_sig(CANDIDATE_PATH)
 )
-
-if SHOW_DEBUG:
-    st.info(f"후보 파일: {CANDIDATE_PATH}  · 사용한 주소 컬럼: **{used_addr_col}**")
-    st.write("후보 컬럼:", list(cand_gdf.columns))
-    st.dataframe(cand_gdf.head(5))
 
 # ===================== 라우팅 유틸 =====================
 def haversine(xy1, xy2):
@@ -294,7 +295,7 @@ st.markdown('<div class="section">🚏 노선 추천</div>', unsafe_allow_html=T
 c1, c2, c3 = st.columns([1.8,1.2,3.2], gap="large")
 
 with c1:
-    st.caption(f"후보 정류장(추가): {len(cand_gdf)}개  |  기존 정류장: {len(existing_gdf)}개  · 사용 주소 컬럼: **{used_addr_col}**")
+    st.caption(f"후보 정류장(추가): {len(cand_gdf)}개  |  기존 정류장: {len(existing_gdf)}개  · 사용 주소 컬럼: **jibun**")
     mode = st.radio("운행 모드", ["차량(운행)","도보(승객 접근)"], horizontal=True)
     profile = "driving" if mode.startswith("차량") else "walking"
     all_names = cand_gdf["name"].tolist()
