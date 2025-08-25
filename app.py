@@ -21,9 +21,9 @@ from streamlit_folium import st_folium
 
 # ===================== 경로/상수 =====================
 EXISTING_SHP   = "천안콜 버스 정류장(v250730)_4326.shp"
-CANDIDATE_PATH = "NNN_top800.shp"   # 후보 정류장 Shapefile (정류장명은 jibun 컬럼 사용)
+CANDIDATE_PATH = "NNN_top800.shp"   # 후보 정류장 (정류장명=jibun)
 
-# ✅ 여기 한 줄에 본인 Mapbox 토큰을 넣으세요 (pk. 로 시작)
+# ✅ 본인 Mapbox 토큰으로 바꿔 넣으세요
 MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lbWppYjByMDV2ajJqcjQyYXUxdzY3byJ9.yLBRJK_Ib6W3p9f16YlIKQ"
 
 PALETTE = ["#e74c3c","#8e44ad","#3498db","#e67e22","#16a085","#2ecc71","#1abc9c","#d35400"]
@@ -44,26 +44,33 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', -apple-system, BlinkMa
 .visit-num{background:#fff;color:#667eea;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.75rem}
 .empty{color:#9ca3af;background:linear-gradient(135deg,#ffecd2 0%,#fcb69f 100%);border-radius:12px;padding:18px 12px;text-align:center}
 
-/* ===== Multiselect 칩: 2열로, … 없이 전체 주소 보이게 ===== */
+/* ===== Multiselect 칩: 크기 키우기 + 2열 + 전체 주소 표시 ===== */
 .stMultiSelect [data-baseweb="select"] > div {
-  flex-wrap: wrap !important;   /* 여러 줄 허용 */
-  gap: 8px !important;
+  flex-wrap: wrap !important;
+  gap: 10px !important;
+  padding-bottom: 6px;
 }
 .stMultiSelect [data-baseweb="tag"] {
-  width: 48% !important;        /* 2열(대략 반반) */
+  width: 48% !important;          /* 2열 */
   max-width: 48% !important;
-  white-space: normal !important;  /* 줄바꿈 허용 */
-  overflow: visible !important;    /* … 제거 */
+  min-height: 48px !important;    /* 칩 높이 업 */
+  padding: 10px 12px !important;
+  border-radius: 10px !important;
+  white-space: normal !important; /* 줄바꿈 허용 */
+  overflow: visible !important;
   text-overflow: clip !important;
+  align-items: flex-start !important;
+  box-sizing: border-box;
 }
 .stMultiSelect [data-baseweb="tag"] * {
   white-space: normal !important;
   overflow: visible !important;
   text-overflow: clip !important;
+  max-width: none !important;
 }
 .stMultiSelect [data-baseweb="select"] [role="combobox"] {
-  height: auto !important;       /* 입력창 높이 자동 확장 */
-  min-height: 42px !important;
+  height: auto !important;
+  min-height: 46px !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -90,7 +97,7 @@ def read_shp_with_encoding(path: Path) -> gpd.GeoDataFrame:
         st.error("pyogrio가 필요합니다. requirements.txt에 'pyogrio' 추가")
         raise
     if not path.exists():
-        st.error(f"파일이 없습니다: {path.name}  (현재 폴더: {Path('.').resolve()})")
+        st.error(f"파일이 없습니다: {path.name} (현재 폴더: {Path('.').resolve()})")
         st.stop()
 
     encs=[]
@@ -163,7 +170,21 @@ def read_existing_shp(path: str) -> gpd.GeoDataFrame:
     g["lon"]=g.geometry.x; g["lat"]=g.geometry.y
     return g[["name","lon","lat","geometry"]]
 
-# ===================== 데이터 로드 (캐시 & jibun 고정) =====================
+# ===================== 커버리지 계산(버퍼/헐) =====================
+def coverage_region(points_gdf: gpd.GeoDataFrame, mode: str = "buffer", radius_m: int = 100):
+    """mode='buffer'->r(m) 버퍼 합집합, mode='hull'->convex hull, 반환:(WGS84 polygon GDF, km²)"""
+    if points_gdf.empty:
+        return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326"), 0.0
+    g = points_gdf.to_crs(epsg=3857)
+    if mode == "hull":
+        geom_3857 = MultiPoint(list(g.geometry)).convex_hull
+    else:
+        geom_3857 = unary_union(g.buffer(radius_m))
+    area_km2 = float(gpd.GeoSeries([geom_3857], crs="EPSG:3857").area.iloc[0] / 1_000_000)
+    out = gpd.GeoDataFrame(geometry=[geom_3857], crs="EPSG:3857").to_crs(epsg=4326)
+    return out, area_km2
+
+# ===================== 데이터 로드(캐시 & jibun 고정) =====================
 def _file_sig(path: str) -> str:
     p=Path(path)
     try:
@@ -175,26 +196,17 @@ def _file_sig(path: str) -> str:
 def load_existing_candidates(_sig_exist: str, _sig_cand: str):
     existing = read_existing_shp(EXISTING_SHP)
     cand     = read_vector(CANDIDATE_PATH)
-
-    # 컬럼명 소문자+strip 통일
     cand.columns = [c.strip().lower() for c in cand.columns]
-
-    # ✅ 반드시 jibun 컬럼 사용
     if "jibun" not in cand.columns:
         st.error(f"후보 데이터에 'jibun' 컬럼이 없습니다. 실제 컬럼: {list(cand.columns)}")
         st.stop()
-
-    # 정류장명 = jibun
     cand["name"] = cand["jibun"].astype(str).str.strip()
     cand["lon"]  = cand.geometry.x
     cand["lat"]  = cand.geometry.y
     cand = cand[["name","lon","lat","geometry"]]
-
     return existing, cand
 
-existing_gdf, cand_gdf = load_existing_candidates(
-    _file_sig(EXISTING_SHP), _file_sig(CANDIDATE_PATH)
-)
+existing_gdf, cand_gdf = load_existing_candidates(_file_sig(EXISTING_SHP), _file_sig(CANDIDATE_PATH))
 
 # ===================== 라우팅 유틸 =====================
 def haversine(xy1, xy2):
@@ -343,8 +355,8 @@ with c3:
                         try:
                             coords,dur,dist = mapbox_route(prev[0],prev[1],lon,lat, profile=profile, token=MAPBOX_TOKEN)
                             ll=[(c[1],c[0]) for c in coords]
-                            folium.PolyLine(ll, color=PALETTE[(idx-1)%len(PALETTE)], weight=5, opacity=0.9).add_to(fg_routes)
                             total_min += dur/60; total_km += dist/1000
+                            folium.PolyLine(ll, color=PALETTE[(idx-1)%len(PALETTE)], weight=5, opacity=0.9).add_to(fg_routes)
                         except Exception as e:
                             st.warning(f"세그먼트 {idx-1}→{idx} 실패: {e}")
                     prev=(lon,lat); order_names.append(name)
@@ -363,19 +375,21 @@ with c3:
 st.markdown('<div class="section">🗺️ 커버리지 비교 (전체 기준)</div>', unsafe_allow_html=True)
 
 cover_mode = st.radio("커버 산정 방식", ["버퍼 합집합(반경 r)", "컨벡스 헐(최대 외피)"], horizontal=True, index=0)
-if cover_mode.startswith("버퍼"):
-    radius_m = st.slider("커버리지 반경(미터)", min_value=50, max_value=300, value=100, step=10)
-else:
-    radius_m = 100  # 헐 모드에서는 사용하지 않지만 시그니처 유지
+radius_m = st.slider("커버리지 반경(미터)", 50, 300, 100, 10) if cover_mode.startswith("버퍼") else 100
+mode_key = "buffer" if cover_mode.startswith("버퍼") else "hull"
 
 exist_pts = existing_gdf[["name","lon","lat","geometry"]].copy()
 cand_pts  = cand_gdf[["name","lon","lat","geometry"]].copy()
 both_pts  = pd.concat([exist_pts, cand_pts], ignore_index=True)
 
-mode_key = "buffer" if cover_mode.startswith("버퍼") else "hull"
-
-base_poly, base_km2 = coverage_region(exist_pts, mode=mode_key, radius_m=radius_m)
-prop_poly, prop_km2 = coverage_region(both_pts,  mode=mode_key, radius_m=radius_m)
+# 예외가 나도 앱이 죽지 않도록 보호
+try:
+    base_poly, base_km2 = coverage_region(exist_pts, mode=mode_key, radius_m=radius_m)
+    prop_poly, prop_km2 = coverage_region(both_pts,  mode=mode_key, radius_m=radius_m)
+except Exception as e:
+    st.error(f"커버리지 계산 오류: {e}")
+    base_poly, prop_poly = gpd.GeoDataFrame(geometry=[], crs="EPSG:4326"), gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+    base_km2 = prop_km2 = 0.0
 
 delta_area = prop_km2 - base_km2
 inc_rate   = (delta_area / base_km2 * 100) if base_km2 > 0 else (100.0 if prop_km2 > 0 else 0.0)
@@ -386,9 +400,8 @@ mc2.metric("제안(기존+추가) 면적", f"{prop_km2:.3f} km²")
 mc3.metric("면적 증가", f"{delta_area:+.3f} km²")
 mc4.metric("증가율", f"{inc_rate:+.1f}%")
 
-ctr_lat2 = float(both_pts["lat"].mean())
-ctr_lon2 = float(both_pts["lon"].mean())
-if math.isnan(ctr_lat2) or math.isnan(ctr_lon2): ctr_lat2, ctr_lon2 = 36.80, 127.15
+ctr_lat2 = float(both_pts["lat"].mean()) if len(both_pts) else 36.80
+ctr_lon2 = float(both_pts["lon"].mean()) if len(both_pts) else 127.15
 
 m2 = folium.Map(location=[ctr_lat2, ctr_lon2], zoom_start=12, tiles="CartoDB Positron", control_scale=True)
 
