@@ -21,11 +21,10 @@ from streamlit_folium import st_folium
 
 # ===================== 경로/상수 =====================
 EXISTING_SHP   = "천안콜 버스 정류장(v250730)_4326.shp"
-CANDIDATE_PATH = "NNN_top800.shp"   # 후보 정류장 Shapefile (jibun 컬럼 사용)
+CANDIDATE_PATH = "NNN_top800.shp"   # 후보 정류장 Shapefile (정류장명은 jibun 컬럼 사용)
 
-# ✅ 여기만 네 토큰으로 바꿔 넣으면 됩니다.
-MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lbWppYjByMDV2ajJqcjQyYXUxdzY3byJ9.yLBRJK_Ib6W3p9f16YlIKQ"   # 예: "pk.abc123...."
-# (환경변수/Secrets는 사용하지 않음)
+# ✅ 여기 한 줄에 본인 Mapbox 토큰을 넣으세요 (pk. 로 시작)
+MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lbWppYjByMDV2ajJqcjQyYXUxdzY3byJ9.yLBRJK_Ib6W3p9f16YlIKQ"
 
 PALETTE = ["#e74c3c","#8e44ad","#3498db","#e67e22","#16a085","#2ecc71","#1abc9c","#d35400"]
 PER_VEHICLE_LIMIT_MIN = 30.0  # 1대 목표 운영시간(분)
@@ -45,44 +44,30 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', -apple-system, BlinkMa
 .visit-num{background:#fff;color:#667eea;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.75rem}
 .empty{color:#9ca3af;background:linear-gradient(135deg,#ffecd2 0%,#fcb69f 100%);border-radius:12px;padding:18px 12px;text-align:center}
 
-/* ===== 선택 항목 2열 칩(긴 주소 전부 표시) ===== */
-.sel-grid { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
-.sel-chip  {
-  flex: 1 1 calc(50% - 8px);
-  min-width: calc(50% - 8px);
-  max-width: calc(50% - 8px);
-  padding:10px 12px;
-  border-radius:10px;
-  background:#fff5f5;
-  border:1px solid #fecaca;
-  color:#991b1b;
-  font-size:0.9rem;
-  line-height:1.35;
-  box-shadow:0 1px 2px rgba(0,0,0,.04);
-  word-break:break-word;
-  white-space:normal;
+/* ===== Multiselect 칩: 2열로, … 없이 전체 주소 보이게 ===== */
+.stMultiSelect [data-baseweb="select"] > div {
+  flex-wrap: wrap !important;   /* 여러 줄 허용 */
+  gap: 8px !important;
 }
-.sel-chip .idx {
-  display:inline-flex; align-items:center; justify-content:center;
-  width:20px; height:20px; margin-right:6px;
-  border-radius:50%; font-weight:800; font-size:.75rem;
-  color:#fff; background:#ef4444;
+.stMultiSelect [data-baseweb="tag"] {
+  width: 48% !important;        /* 2열(대략 반반) */
+  max-width: 48% !important;
+  white-space: normal !important;  /* 줄바꿈 허용 */
+  overflow: visible !important;    /* … 제거 */
+  text-overflow: clip !important;
+}
+.stMultiSelect [data-baseweb="tag"] * {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+.stMultiSelect [data-baseweb="select"] [role="combobox"] {
+  height: auto !important;       /* 입력창 높이 자동 확장 */
+  min-height: 42px !important;
 }
 </style>
 """, unsafe_allow_html=True)
 st.markdown('<div class="header"><div class="title">천안 DRT - 맞춤형 AI기반 스마트 교통 가이드</div></div>', unsafe_allow_html=True)
-
-def render_selected_grid(title: str, items: list[str]):
-    """선택된 항목을 2열 칩으로 가독성 있게 렌더링"""
-    if not items:
-        st.caption(f"선택된 {title} 없음")
-        return
-    st.caption(f"선택된 {title} ({len(items)}개)")
-    html = ['<div class="sel-grid">']
-    for i, t in enumerate(items, 1):
-        html.append(f'<div class="sel-chip"><span class="idx">{i}</span>{t}</div>')
-    html.append("</div>")
-    st.markdown("\n".join(html), unsafe_allow_html=True)
 
 # ===================== 사이드바 =====================
 with st.sidebar:
@@ -95,11 +80,7 @@ with st.sidebar:
             try: del st.session_state[k]
             except: pass
         st.rerun()
-
-    # 토큰 상태만 표시 (보안상 값은 노출하지 않음)
     st.caption(f"Mapbox 토큰 상태: {'✅ 설정됨' if MAPBOX_TOKEN else '❌ 미설정'}")
-
-    SHOW_DEBUG = st.checkbox("디버그: 후보 컬럼/샘플 표시", value=False)
 
 # ===================== 파일 로드 유틸 =====================
 def read_shp_with_encoding(path: Path) -> gpd.GeoDataFrame:
@@ -269,20 +250,6 @@ def build_single_vehicle_steps(starts: List[str], ends: List[str], stops_df: pd.
         cur_pt=dst_xy[mapping[nxt]]
     return order
 
-# ===================== 커버리지 계산 =====================
-def coverage_region(points_gdf: gpd.GeoDataFrame, mode: str = "buffer", radius_m: int = 100):
-    if points_gdf.empty:
-        return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326"), 0.0
-    g = points_gdf.to_crs(epsg=3857)
-    if mode == "hull":
-        hull = MultiPoint(list(g.geometry)).convex_hull
-        geom_3857 = hull
-    else:
-        geom_3857 = unary_union(g.buffer(radius_m))
-    area_km2 = float(gpd.GeoSeries([geom_3857], crs="EPSG:3857").area.iloc[0] / 1_000_000)
-    out = gpd.GeoDataFrame(geometry=[geom_3857], crs="EPSG:3857").to_crs(epsg=4326)
-    return out, area_km2
-
 # ===================== 노선 추천 UI =====================
 st.markdown('<div class="section">🚏 노선 추천</div>', unsafe_allow_html=True)
 c1, c2, c3 = st.columns([1.8,1.2,3.2], gap="large")
@@ -294,10 +261,6 @@ with c1:
     all_names = cand_gdf["name"].tolist()
     starts = st.multiselect("출발(승차) 정류장", all_names)
     ends   = st.multiselect("도착(하차) 정류장", all_names)
-
-    # ✅ 선택 결과 그리드 칩(2열, 긴 주소 전부 표시)
-    render_selected_grid("출발지", starts)
-    render_selected_grid("도착지", ends)
 
     route_mode = st.radio("노선 모드", ["개별쌍(모든 조합)","단일 차량(연속 경로)"], index=1)
     st.markdown(
@@ -380,8 +343,8 @@ with c3:
                         try:
                             coords,dur,dist = mapbox_route(prev[0],prev[1],lon,lat, profile=profile, token=MAPBOX_TOKEN)
                             ll=[(c[1],c[0]) for c in coords]
-                            total_min += dur/60; total_km += dist/1000
                             folium.PolyLine(ll, color=PALETTE[(idx-1)%len(PALETTE)], weight=5, opacity=0.9).add_to(fg_routes)
+                            total_min += dur/60; total_km += dist/1000
                         except Exception as e:
                             st.warning(f"세그먼트 {idx-1}→{idx} 실패: {e}")
                     prev=(lon,lat); order_names.append(name)
@@ -403,7 +366,7 @@ cover_mode = st.radio("커버 산정 방식", ["버퍼 합집합(반경 r)", "�
 if cover_mode.startswith("버퍼"):
     radius_m = st.slider("커버리지 반경(미터)", min_value=50, max_value=300, value=100, step=10)
 else:
-    radius_m = 100
+    radius_m = 100  # 헐 모드에서는 사용하지 않지만 시그니처 유지
 
 exist_pts = existing_gdf[["name","lon","lat","geometry"]].copy()
 cand_pts  = cand_gdf[["name","lon","lat","geometry"]].copy()
