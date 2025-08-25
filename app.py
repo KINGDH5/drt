@@ -21,14 +21,11 @@ from streamlit_folium import st_folium
 
 # ===================== 경로/상수 =====================
 EXISTING_SHP   = "천안콜 버스 정류장(v250730)_4326.shp"
-CANDIDATE_PATH = "NNN_top800.shp"   # ✅ 후보 정류장 Shapefile (jibun 컬럼 사용)
+CANDIDATE_PATH = "NNN_top800.shp"   # 후보 정류장 Shapefile (jibun 컬럼 사용)
 
-# 기본 토큰(없으면 UI/환경변수/시크릿 순으로 불러옴)
-MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "")
-if not MAPBOX_TOKEN:
-    try: MAPBOX_TOKEN = st.secrets["MAPBOX_TOKEN"]
-    except Exception:
-        pass
+# ✅ 여기만 네 토큰으로 바꿔 넣으면 됩니다.
+MAPBOX_TOKEN = "pk.여기에_본인_토큰"   # 예: "pk.abc123...."
+# (환경변수/Secrets는 사용하지 않음)
 
 PALETTE = ["#e74c3c","#8e44ad","#3498db","#e67e22","#16a085","#2ecc71","#1abc9c","#d35400"]
 PER_VEHICLE_LIMIT_MIN = 30.0  # 1대 목표 운영시간(분)
@@ -99,11 +96,8 @@ with st.sidebar:
             except: pass
         st.rerun()
 
-    # ✅ 맵박스 토큰 입력칸
-    user_token = st.text_input("pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lbWppYjByMDV2ajJqcjQyYXUxdzY3byJ9.yLBRJK_Ib6W3p9f16YlIKQ", type="password",
-                               help="환경변수(MAPBOX_TOKEN)나 secrets가 없으면 여기 입력하세요.")
-    if user_token:
-        MAPBOX_TOKEN = user_token.strip()
+    # 토큰 상태만 표시 (보안상 값은 노출하지 않음)
+    st.caption(f"Mapbox 토큰 상태: {'✅ 설정됨' if MAPBOX_TOKEN else '❌ 미설정'}")
 
     SHOW_DEBUG = st.checkbox("디버그: 후보 컬럼/샘플 표시", value=False)
 
@@ -114,7 +108,6 @@ def read_shp_with_encoding(path: Path) -> gpd.GeoDataFrame:
     except Exception:
         st.error("pyogrio가 필요합니다. requirements.txt에 'pyogrio' 추가")
         raise
-    # 존재 확인을 먼저
     if not path.exists():
         st.error(f"파일이 없습니다: {path.name}  (현재 폴더: {Path('.').resolve()})")
         st.stop()
@@ -387,8 +380,8 @@ with c3:
                         try:
                             coords,dur,dist = mapbox_route(prev[0],prev[1],lon,lat, profile=profile, token=MAPBOX_TOKEN)
                             ll=[(c[1],c[0]) for c in coords]
-                            folium.PolyLine(ll, color=PALETTE[(idx-1)%len(PALETTE)], weight=5, opacity=0.9).add_to(fg_routes)
                             total_min += dur/60; total_km += dist/1000
+                            folium.PolyLine(ll, color=PALETTE[(idx-1)%len(PALETTE)], weight=5, opacity=0.9).add_to(fg_routes)
                         except Exception as e:
                             st.warning(f"세그먼트 {idx-1}→{idx} 실패: {e}")
                     prev=(lon,lat); order_names.append(name)
@@ -410,7 +403,7 @@ cover_mode = st.radio("커버 산정 방식", ["버퍼 합집합(반경 r)", "�
 if cover_mode.startswith("버퍼"):
     radius_m = st.slider("커버리지 반경(미터)", min_value=50, max_value=300, value=100, step=10)
 else:
-    radius_m = 100  # 헐 모드에서는 사용하지 않지만 시그니처 유지
+    radius_m = 100
 
 exist_pts = existing_gdf[["name","lon","lat","geometry"]].copy()
 cand_pts  = cand_gdf[["name","lon","lat","geometry"]].copy()
