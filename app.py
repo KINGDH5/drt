@@ -100,7 +100,7 @@ with st.sidebar:
         st.rerun()
 
     # ✅ 맵박스 토큰 입력칸
-    user_token = st.text_input("🔑 Mapbox Token 입력", type="password",
+    user_token = st.text_input("pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lbWppYjByMDV2ajJqcjQyYXUxdzY3byJ9.yLBRJK_Ib6W3p9f16YlIKQ", type="password",
                                help="환경변수(MAPBOX_TOKEN)나 secrets가 없으면 여기 입력하세요.")
     if user_token:
         MAPBOX_TOKEN = user_token.strip()
