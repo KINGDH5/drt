@@ -21,12 +21,10 @@ from streamlit_folium import st_folium
 
 # ===================== 경로/상수 =====================
 EXISTING_SHP   = "천안콜 버스 정류장(v250730)_4326.shp"
-CANDIDATE_PATH = "N_top800_WGS.shp"   # 후보 정류장 shapefile
+CANDIDATE_PATH = "NNN_top800.shp"    # ✅ 후보 파일 고정 (지금 jibun 있는 파일)
 
 # 기본 토큰(없으면 UI/환경변수/시크릿 순으로 불러옴)
-MAPBOX_TOKEN = ""
-if not MAPBOX_TOKEN:
-    MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "")
+MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "")
 if not MAPBOX_TOKEN:
     try: MAPBOX_TOKEN = st.secrets["MAPBOX_TOKEN"]
     except Exception: pass
@@ -64,10 +62,13 @@ with st.sidebar:
             except: pass
         st.rerun()
 
-    # ✅ 맵박스 토큰 입력칸 추가
-    user_token = st.text_input("🔑 Mapbox Token 입력", type="password", help="환경변수(MAPBOX_TOKEN)나 secrets가 없으면 여기 입력하세요.")
+    # ✅ 맵박스 토큰 입력칸
+    user_token = st.text_input("🔑 Mapbox Token 입력", type="password")
     if user_token:
         MAPBOX_TOKEN = user_token.strip()
+
+    # ✅ 디버그 표시
+    SHOW_DEBUG = st.checkbox("디버그: 후보 컬럼/샘플 표시", value=False)
 
 # ===================== 파일 로드 유틸 =====================
 def read_shp_with_encoding(path: Path) -> gpd.GeoDataFrame:
@@ -142,26 +143,49 @@ def read_existing_shp(path: str) -> gpd.GeoDataFrame:
     return g[["name","lon","lat","geometry"]]
 
 # ===================== 데이터 로드 =====================
+def _file_sig(path: str) -> str:
+    """캐시 무효화를 위한 파일 시그니처(경로 + 수정시각)"""
+    p=Path(path)
+    try:
+        return f"{p.resolve()}::{p.stat().st_mtime_ns}"
+    except Exception:
+        return str(p)
+
 @st.cache_data
-def load_existing_candidates():
+def load_existing_candidates(_sig_exist: str, _sig_cand: str):
     existing = read_existing_shp(EXISTING_SHP)
     cand     = read_vector(CANDIDATE_PATH)
 
-    # ✅ 후보 정류장: 컬럼명 소문자+strip 처리
+    # ✅ 컬럼명 소문자+strip 처리
     cand.columns = [c.strip().lower() for c in cand.columns]
 
-    if "jibun" not in cand.columns:
-        st.error(f"후보 데이터에 'jibun' 컬럼이 없습니다. 실제 컬럼: {list(cand.columns)}")
-        st.stop()
-    cand["name"] = cand["jibun"].astype(str).str.strip()
+    # ✅ 우선순위: jibun → juso → 입력주소/표준신주소/표준구주소
+    addr_col = None
+    for c in ["jibun", "juso", "입력주소", "표준신주소", "표준구주소"]:
+        lc = c.lower()
+        if lc in cand.columns:
+            addr_col = lc
+            break
 
+    if addr_col is None:
+        st.error(f"후보 데이터에 주소 컬럼이 없습니다. 실제 컬럼: {list(cand.columns)}")
+        st.stop()
+
+    cand["name"] = cand[addr_col].astype(str).str.strip()
     cand["lon"]  = cand.geometry.x
     cand["lat"]  = cand.geometry.y
     cand = cand[["name","lon","lat","geometry"]]
 
-    return existing, cand
+    return existing, cand, addr_col
 
-existing_gdf, cand_gdf = load_existing_candidates()
+existing_gdf, cand_gdf, used_addr_col = load_existing_candidates(
+    _file_sig(EXISTING_SHP), _file_sig(CANDIDATE_PATH)
+)
+
+if SHOW_DEBUG:
+    st.info(f"후보 파일: {CANDIDATE_PATH}  · 사용한 주소 컬럼: **{used_addr_col}**")
+    st.write("후보 컬럼:", list(cand_gdf.columns))
+    st.dataframe(cand_gdf.head(5))
 
 # ===================== 라우팅 유틸 =====================
 def haversine(xy1, xy2):
@@ -236,7 +260,7 @@ st.markdown('<div class="section">🚏 노선 추천</div>', unsafe_allow_html=T
 c1, c2, c3 = st.columns([1.8,1.2,3.2], gap="large")
 
 with c1:
-    st.caption(f"후보 정류장(추가): {len(cand_gdf)}개  |  기존 정류장: {len(existing_gdf)}개")
+    st.caption(f"후보 정류장(추가): {len(cand_gdf)}개  |  기존 정류장: {len(existing_gdf)}개  · 사용 주소 컬럼: **{used_addr_col}**")
     mode = st.radio("운행 모드", ["차량(운행)","도보(승객 접근)"], horizontal=True)
     profile = "driving" if mode.startswith("차량") else "walking"
     all_names = cand_gdf["name"].tolist()
@@ -394,3 +418,4 @@ if not prop_poly.empty:
 
 folium.LayerControl(collapsed=True).add_to(m2)
 st_folium(m2, height=560, returned_objects=[], use_container_width=True, key="coverage_map_all")
+
