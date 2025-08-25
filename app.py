@@ -24,7 +24,7 @@ EXISTING_SHP   = "천안콜 버스 정류장(v250730)_4326.shp"
 CANDIDATE_PATH = "NNN_top800.shp"   # 후보 정류장 Shapefile (jibun 컬럼 사용)
 
 # ✅ 여기만 네 토큰으로 바꿔 넣으면 됩니다.
-MAPBOX_TOKEN = "pk.여기에_본인_토큰"   # 예: "pk.abc123...."
+MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lbWppYjByMDV2ajJqcjQyYXUxdzY3byJ9.yLBRJK_Ib6W3p9f16YlIKQ"   # 예: "pk.abc123...."
 # (환경변수/Secrets는 사용하지 않음)
 
 PALETTE = ["#e74c3c","#8e44ad","#3498db","#e67e22","#16a085","#2ecc71","#1abc9c","#d35400"]
