@@ -21,10 +21,10 @@ from streamlit_folium import st_folium
 
 # ===================== 경로/상수 =====================
 EXISTING_SHP   = "천안콜 버스 정류장(v250730)_4326.shp"
-CANDIDATE_PATH = "NNN_top800.shp"    # ✅ 후보 파일 고정 (지금 jibun 있는 파일)
+CANDIDATE_PATH = "N_top800_WGS.shp"   # <- 필요시 "NNN_top800.shp" 등으로 변경
 
 # 기본 토큰(없으면 UI/환경변수/시크릿 순으로 불러옴)
-MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "")
+MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lbWppYjByMDV2ajJqcjQyYXUxdzY3byJ9.yLBRJK_Ib6W3p9f16YlIKQ")
 if not MAPBOX_TOKEN:
     try: MAPBOX_TOKEN = st.secrets["MAPBOX_TOKEN"]
     except Exception: pass
@@ -46,9 +46,45 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', -apple-system, BlinkMa
 .visit-card{display:flex;align-items:center;gap:10px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;border-radius:12px;padding:8px 10px;margin-bottom:6px}
 .visit-num{background:#fff;color:#667eea;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.75rem}
 .empty{color:#9ca3af;background:linear-gradient(135deg,#ffecd2 0%,#fcb69f 100%);border-radius:12px;padding:18px 12px;text-align:center}
+
+/* ===== 선택 항목 2열 칩(긴 주소 전부 표시) ===== */
+.sel-grid { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
+.sel-chip  {
+  flex: 1 1 calc(50% - 8px);     /* 가로 2개씩 */
+  min-width: calc(50% - 8px);
+  max-width: calc(50% - 8px);
+  padding:10px 12px;
+  border-radius:10px;
+  background:#fff5f5;
+  border:1px solid #fecaca;
+  color:#991b1b;
+  font-size:0.9rem;
+  line-height:1.35;
+  box-shadow:0 1px 2px rgba(0,0,0,.04);
+  word-break:break-word;         /* 긴 주소 줄바꿈 */
+  white-space:normal;            /* 칩 내부 줄바꿈 허용 */
+}
+.sel-chip .idx {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:20px; height:20px; margin-right:6px;
+  border-radius:50%; font-weight:800; font-size:.75rem;
+  color:#fff; background:#ef4444;
+}
 </style>
 """, unsafe_allow_html=True)
 st.markdown('<div class="header"><div class="title">천안 DRT - 맞춤형 AI기반 스마트 교통 가이드</div></div>', unsafe_allow_html=True)
+
+def render_selected_grid(title: str, items: list[str]):
+    """선택된 항목을 2열 칩으로 가독성 있게 렌더링"""
+    if not items:
+        st.caption(f"선택된 {title} 없음")
+        return
+    st.caption(f"선택된 {title} ({len(items)}개)")
+    html = ['<div class="sel-grid">']
+    for i, t in enumerate(items, 1):
+        html.append(f'<div class="sel-chip"><span class="idx">{i}</span>{t}</div>')
+    html.append("</div>")
+    st.markdown("\n".join(html), unsafe_allow_html=True)
 
 # ===================== 사이드바 =====================
 with st.sidebar:
@@ -63,11 +99,10 @@ with st.sidebar:
         st.rerun()
 
     # ✅ 맵박스 토큰 입력칸
-    user_token = st.text_input("🔑 Mapbox Token 입력", type="password")
+    user_token = st.text_input("🔑 Mapbox Token 입력", type="password", help="환경변수(MAPBOX_TOKEN)나 secrets가 없으면 여기 입력하세요.")
     if user_token:
         MAPBOX_TOKEN = user_token.strip()
 
-    # ✅ 디버그 표시
     SHOW_DEBUG = st.checkbox("디버그: 후보 컬럼/샘플 표시", value=False)
 
 # ===================== 파일 로드 유틸 =====================
@@ -142,9 +177,8 @@ def read_existing_shp(path: str) -> gpd.GeoDataFrame:
     g["lon"]=g.geometry.x; g["lat"]=g.geometry.y
     return g[["name","lon","lat","geometry"]]
 
-# ===================== 데이터 로드 =====================
+# ===================== 데이터 로드 (캐시 & 컬럼 자동감지) =====================
 def _file_sig(path: str) -> str:
-    """캐시 무효화를 위한 파일 시그니처(경로 + 수정시각)"""
     p=Path(path)
     try:
         return f"{p.resolve()}::{p.stat().st_mtime_ns}"
@@ -156,21 +190,21 @@ def load_existing_candidates(_sig_exist: str, _sig_cand: str):
     existing = read_existing_shp(EXISTING_SHP)
     cand     = read_vector(CANDIDATE_PATH)
 
-    # ✅ 컬럼명 소문자+strip 처리
+    # 컬럼명 소문자+strip 통일
     cand.columns = [c.strip().lower() for c in cand.columns]
 
-    # ✅ 우선순위: jibun → juso → 입력주소/표준신주소/표준구주소
+    # 주소 컬럼 자동 선택(우선순위: jibun → juso → 입력주소 → 표준신주소 → 표준구주소)
     addr_col = None
     for c in ["jibun", "juso", "입력주소", "표준신주소", "표준구주소"]:
         lc = c.lower()
         if lc in cand.columns:
             addr_col = lc
             break
-
     if addr_col is None:
         st.error(f"후보 데이터에 주소 컬럼이 없습니다. 실제 컬럼: {list(cand.columns)}")
         st.stop()
 
+    # 정류장명 = 주소
     cand["name"] = cand[addr_col].astype(str).str.strip()
     cand["lon"]  = cand.geometry.x
     cand["lat"]  = cand.geometry.y
@@ -266,6 +300,11 @@ with c1:
     all_names = cand_gdf["name"].tolist()
     starts = st.multiselect("출발(승차) 정류장", all_names)
     ends   = st.multiselect("도착(하차) 정류장", all_names)
+
+    # ✅ 선택 결과 그리드 칩(2열, 긴 주소 전부 표시)
+    render_selected_grid("출발지", starts)
+    render_selected_grid("도착지", ends)
+
     route_mode = st.radio("노선 모드", ["개별쌍(모든 조합)","단일 차량(연속 경로)"], index=1)
     st.markdown(
         '<span class="legend-chip"><span class="legend-dot" style="background:#e74c3c"></span>첫 승차</span>'
@@ -418,4 +457,3 @@ if not prop_poly.empty:
 
 folium.LayerControl(collapsed=True).add_to(m2)
 st_folium(m2, height=560, returned_objects=[], use_container_width=True, key="coverage_map_all")
-
