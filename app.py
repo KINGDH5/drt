@@ -1,6 +1,6 @@
 # app.py
 # ---------------------------------------------------------
-# 천안 DRT - 맞춤형 AI기반 스마트 교통 가이드
+# 천안 DRT - AI기반 스마트 교통 가이드
 # (노선 추천 + 커버리지 비교(버퍼/컨벡스헐 토글), pyogrio 경로)
 # ---------------------------------------------------------
 
@@ -21,7 +21,7 @@ from streamlit_folium import st_folium
 
 # ===================== 경로/상수 =====================
 EXISTING_SHP   = "천안콜 버스 정류장(v250730)_4326.shp"
-CANDIDATE_PATH = "NNN_top800.shp"   # 후보 정류장 (정류장명=jibun)
+CANDIDATE_PATH = "NNNN_top800.shp"   # 후보 정류장 (정류장명=jibun)
 
 # ✅ 본인 Mapbox 토큰으로 바꿔 넣으세요 (pk.로 시작)
 MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lbWppYjByMDV2ajJqcjQyYXUxdzY3byJ9.yLBRJK_Ib6W3p9f16YlIKQ"
@@ -284,7 +284,7 @@ def build_single_vehicle_steps(starts: List[str], ends: List[str], stops_df: pd.
         nxt=min(remain,key=lambda i: haversine(cur_pt,src_xy[i]))
         remain.remove(nxt)
         order.append({"kind":"pickup","name":starts[nxt],"xy":src_xy[nxt]})
-        order.append({"kind":"drop","name":ends[mapping[nxt]],"xy":dst_xy[mapping[nxt]]})
+        order.append({"kind":"drop","name":ends[mapping[nxt]],"xy":dst_xy[nxt]})
         cur_pt=dst_xy[mapping[nxt]]
     return order
 
